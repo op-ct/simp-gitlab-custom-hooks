@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# This script ensures that merging to a specific branch is only allowed to happen
+# from a singular branch reference
+
+# -----
+# Script Settings
+# -----
+DEST_BRANCH='master'
+SRC_BRANCH='staging'
+
+while read oldrev newrev refname; do
+  # oldrev
+  #   The original HEAD from the destination branch
+  #
+  # newrev
+  #   Newly calculated HEAD for the completed merge
+  #
+  # refname
+  #   The destination branch of the merge/push
+
+  # Append refs/heads to the string
+  [[ "${DEST_BRANCH}" =~ "refs/heads" ]] || DEST_BRANCH="refs/heads/${DEST_BRANCH}"
+  [[ "${SRC_BRANCH}" =~ "refs/heads" ]] || SRC_BRANCH="refs/heads/${SRC_BRANCH}"
+
+  if [[ "${refname}" != "${DEST_BRANCH}" ]]; then
+    # Not the branch we are controlling, so allow push/merge
+    exit 0
+  else
+    # Get the current revision of the source branch we want
+    src_rev="$(git show-ref "${SRC_BRANCH}" | cut -d ' ' -f 1)"
+    parent_revs=($(git log -1 --pretty='%P' "${newrev}"))
+
+    # Check to see if the source branch revision is a parent
+    # If so, we assume that the push is from the HEAD of the correct
+    # branch
+    for rev in "${parent_revs[@]}"; do
+      [[ "${rev}" == "${src_rev}" ]] && exit 0
+    done
+
+    # Get a list of all revisions in the destination branch (for reverts)
+    past_revs=($(git log --pretty="%H" "${DEST_BRANCH}"))
+
+    # For reverts we want to look at the first parent ref, this MUST be in the
+    # history of the branch
+    for i in "${past_revs[@]}"; do
+      [[ "${i}" == "${parent_revs[0]}" ]] && exit 0
+    done
+
+    echo "Merges to the branch ${DEST_BRANCH} must originate from the brach ${SRC_BRANCH}. Merges from other branches are not allowed."
+    exit 1
+  fi
+done
