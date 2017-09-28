@@ -1,0 +1,8 @@
+---
+global:
+  empty_commit: '0000000000000000000000000000000000000000'
+pre-receive:
+  branch_based_merge:
+    branches:
+      master:
+        - staging
