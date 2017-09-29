@@ -12,10 +12,14 @@ def pass_hook
 end
 
 hooks_dir = File.expand_path(File.dirname(__FILE__))
-config_file = ENV['CUSTOM_HOOK_CONFIG'] || 'hooks.yaml'
+config_file = File.join(hooks_dir, 'hooks.yaml')
 
 # Load options
-options = YAML.load_file("#{hooks_dir}/#{config_file}")
+begin
+  options = YAML.load_file(config_file)
+rescue Errno::ENOENT
+  fail_hook("Error loading custom hooks configuration file at #{config_file}")
+end
 
 # The pre-receive hook receives 3 command-line arguments, separated by spaces
 # on STDIN
