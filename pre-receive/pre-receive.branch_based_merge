@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 
 require 'yaml'
+require 'json'
+require 'net/http'
 
 def fail_hook(message)
   puts message
@@ -12,6 +14,7 @@ def pass_hook
 end
 
 hooks_dir = File.expand_path(File.dirname(__FILE__))
+repo_name = File.basename(File.expand_path(ENV['PWD']), '.git')
 config_file = File.join(hooks_dir, 'hooks.yaml')
 
 # Load options
@@ -46,9 +49,9 @@ else
   merge_parent_revs = %x[git log -1 --pretty='%P' #{newrev}].split(' ')
 
   valid_source_revs = Array.new
-  valid_branches.each { |branch|
+  valid_branches.each do |branch|
     valid_source_revs << %x[git show-ref refs/heads/#{branch}].split(' ').first
-  }
+  end
 
   # Now we have a list of valid source branch HEAD refs and valid merge parents
   # We union the arrays and check if it's empty
@@ -63,7 +66,71 @@ else
   if rev_history.include?(merge_parent_revs.last) then
     pass_hook
   end
+
+  # If this is not a valid fast-forward merge from a permitted branch, nor a
+  # revert, then we should check the merge message and check for a configured
+  # out of band regex
+  oob_regex = options['pre-receive']['branch_based_merge']['oob_regex']
+  api_token = options['pre-receive']['branch_based_merge']['api_token']
+
+  if ! oob_regex.empty? and ! api_token.empty? then
+    # At this point we should lookup the project id and the merge request info
+    # and be sure to handle pagination for servers with large amounts of
+    # projects
+    next_page = '1'
+    result = []
+    while ! next_page.empty? do
+      uri = URI.parse("http://localhost/api/v4/projects?page=#{next_page}")
+      request = Net::HTTP::Get.new(uri)
+      request['PRIVATE-TOKEN'] = api_token
+      req_options = {
+        use_ssl: false,
+      }
+
+      response = Net::HTTP.start(uri.hostname, uri.port, req_options) do |http|
+        http.request(request)
+      end
+
+      if response.code == '200' then
+        result.concat(JSON.parse(response.body))
+        next_page = response['x-next-page']
+      else
+        next_page = ''
+      end
+    end
+
+    project_id = -1
+    result.each do |project|
+      project_id = project['id'] if (project['path'] == repo_name)
+    end
+
+    # At this point we should have a project_id to get the merge info from
+    if project_id != -1 then
+      mr_id = %x[git show-ref].split("\n").grep(/^#{merge_parent_revs.last}.*merge-requests/).first.split('/')[-2]
+      result = []
+      uri = URI.parse("http://localhost/api/v4/projects/#{project_id}/merge_requests?iids=#{mr_id}")
+      request = Net::HTTP::Get.new(uri)
+      request['PRIVATE-TOKEN'] = api_token
+      req_options = {
+        use_ssl: false
+      }
+
+      response = Net::HTTP.start(uri.hostname, uri.port, req_options) do |http|
+        http.request(request)
+      end
+
+      if response.code == '200' then
+        result = JSON.parse(response.body)
+        if result.length == 1 then
+          # make sure we only got 1 result or...bad
+          if result[0]['description'].match(Regexp.new(oob_regex)) then
+            pass_hook
+          end
+        end
+      end
+    end
+  end
 end
 
 # If we get to the end without the hook passing, we fail the hook
-fail_hook("Merges to the branch #{refname} must originate from the following branch(es): " + valid_source_revs.join(', ') + ". Merges from other branches are not allowed.")
+fail_hook("Merges to the branch #{refname} must originate from the following branch(es): " + valid_branches.join(', ') + ". Merges from other branches are not allowed.")
