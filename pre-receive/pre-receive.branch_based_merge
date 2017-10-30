@@ -14,8 +14,11 @@ def pass_hook
 end
 
 hooks_dir = File.expand_path(File.dirname(__FILE__))
-repo_name = File.basename(File.expand_path(ENV['PWD']), '.git')
 config_file = File.join(hooks_dir, 'hooks.yaml')
+
+# Use namespaced path
+ns_path = File.join(File.expand_path(ENV['PWD']).split('/').last(2))
+repo_name = File.join(File.dirname(ns_path), File.basename(ns_path, '.git'))
 
 # Load options
 begin
@@ -101,7 +104,10 @@ else
 
     project_id = -1
     result.each do |project|
-      project_id = project['id'] if (project['path'] == repo_name)
+      if project['path_with_namespace'] == repo_name then
+        project_id = project['id']
+        break
+      end
     end
 
     # At this point we should have a project_id to get the merge info from
